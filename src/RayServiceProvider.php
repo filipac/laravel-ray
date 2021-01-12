@@ -37,7 +37,6 @@ class RayServiceProvider extends ServiceProvider
             ->listenForDumps()
             ->registerMacros()
             ->registerBindings()
-            ->registerBladeDirectives()
             ->listenForEvents();
     }
 
