@@ -38,7 +38,6 @@ class RayServiceProvider extends ServiceProvider
             ->registerWatchers()
             ->registerMacros()
             ->registerBindings()
-            ->registerBladeDirectives()
             ->registerPayloadFinder();
     }
 
