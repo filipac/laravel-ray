@@ -2,15 +2,17 @@
 
 namespace Spatie\LaravelRay\Payloads;
 
-use Exception;
 use Illuminate\Mail\Mailable;
 use Spatie\Ray\Payloads\Payload;
+use Throwable;
 
 class MailablePayload extends Payload
 {
-    protected string $html = '';
+    /** @var string */
+    protected $html = '';
 
-    protected ?Mailable $mailable = null;
+    /** @var \Illuminate\Mail\Mailable|null */
+    protected $mailable = null;
 
     public static function forMailable(Mailable $mailable)
     {
@@ -57,7 +59,7 @@ class MailablePayload extends Payload
     {
         try {
             return $mailable->render();
-        } catch (Exception $exception) {
+        } catch (Throwable $exception) {
             return "Mailable could not be rendered because {$exception->getMessage()}";
         }
     }

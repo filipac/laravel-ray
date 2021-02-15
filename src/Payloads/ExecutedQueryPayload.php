@@ -7,7 +7,8 @@ use Spatie\Ray\Payloads\Payload;
 
 class ExecutedQueryPayload extends Payload
 {
-    protected QueryExecuted $query;
+    /** @var \Illuminate\Database\Events\QueryExecuted */
+    protected $query;
 
     public function __construct(QueryExecuted $query)
     {
@@ -26,7 +27,6 @@ class ExecutedQueryPayload extends Payload
             'bindings' => $this->query->bindings,
             'connection_name' => $this->query->connectionName,
             'time' => $this->query->time,
-
         ];
     }
 }

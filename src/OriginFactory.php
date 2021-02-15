@@ -2,6 +2,8 @@
 
 namespace Spatie\LaravelRay;
 
+use Illuminate\Cache\CacheManager;
+use Illuminate\Contracts\Container\BindingResolutionException;
 use Illuminate\Events\Dispatcher;
 use Illuminate\Log\Logger;
 use Illuminate\Log\LogManager;
@@ -11,6 +13,9 @@ use Illuminate\Support\Str;
 use Spatie\Backtrace\Backtrace;
 use Spatie\Backtrace\Frame;
 use Spatie\LaravelRay\DumpRecorder\DumpRecorder;
+use Spatie\LaravelRay\Watchers\CacheWatcher;
+use Spatie\LaravelRay\Watchers\QueryWatcher;
+use Spatie\LaravelRay\Watchers\ViewWatcher;
 use Spatie\Ray\Origin\Origin;
 use Spatie\Ray\Ray;
 
@@ -69,12 +74,20 @@ class OriginFactory
             return $this->findFrameForCollectionMacro($frames, $indexOfRay);
         }
 
-        if ($rayFrame->class === QueryLogger::class) {
+        if ($rayFrame->class === QueryWatcher::class) {
             return $this->findFrameForQuery($frames);
+        }
+
+        if ($rayFrame->class === ViewWatcher::class) {
+            return $this->findFrameForView($frames, $indexOfRay);
         }
 
         if ($rayFrame->class === DumpRecorder::class) {
             return $this->findFrameForDump($frames);
+        }
+
+        if ($rayFrame->class === CacheWatcher::class) {
+            return $this->findFrameForCache($frames);
         }
 
         if ($originFrame->class === Dispatcher::class) {
@@ -85,8 +98,12 @@ class OriginFactory
             $this->returnTinkerFrame();
         }
 
-        if (Str::startsWith($originFrame->file, storage_path('framework/views'))) {
-            return $this->replaceCompiledViewPathWithOriginalViewPath($originFrame);
+        try {
+            if (Str::startsWith($originFrame->file, storage_path('framework/views'))) {
+                return $this->replaceCompiledViewPathWithOriginalViewPath($originFrame);
+            }
+        } catch (BindingResolutionException $exception) {
+            // ignore errors caused by using `storage_path`
         }
 
         return $originFrame;
@@ -100,9 +117,16 @@ class OriginFactory
     protected function findFrameForQuery(Collection $frames): ?Frame
     {
         $indexOfLastDatabaseCall = $frames
-            ->search(fn (Frame $frame) => Str::startsWith($frame->class, 'Illuminate\Database'));
+            ->search(function (Frame $frame) {
+                return Str::startsWith($frame->class, 'Illuminate\Database');
+            });
 
         return $frames[$indexOfLastDatabaseCall + 1] ?? null;
+    }
+
+    protected function findFrameForView(Collection $frames, int $indexOfRayFrame): ?Frame
+    {
+        return $frames[$indexOfRayFrame + 6] ?? null;
     }
 
     protected function findFrameForDump(Collection $frames): ?Frame
@@ -135,7 +159,6 @@ class OriginFactory
                 return ($frame->class === Dispatcher::class) && $frame->method === 'dispatch';
             });
 
-
         /** @var Frame $foundFrame */
         if ($foundFrame = $frames[$indexOfEventDispatcherCall + 2]) {
             if (Str::endsWith($foundFrame->file, Ray::makePathOsSafe('/Illuminate/Foundation/Events/Dispatchable.php'))) {
@@ -164,6 +187,19 @@ class OriginFactory
         }
 
         return $foundFrame ?? null;
+    }
+
+    public function findFrameForCache(Collection $frames): ?Frame
+    {
+        $index = $frames->search(function (Frame $frame) {
+            return $frame->class === CacheManager::class;
+        });
+
+        while (Str::startsWith($frames[$index]->class, 'Illuminate')) {
+            $index++;
+        }
+
+        return $frames[$index] ?? null;
     }
 
     protected function replaceCompiledViewPathWithOriginalViewPath(Frame $frame): Frame

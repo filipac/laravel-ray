@@ -8,12 +8,16 @@ use Illuminate\Support\Facades\View;
 use Orchestra\Testbench\TestCase as Orchestra;
 use Spatie\LaravelRay\Ray;
 use Spatie\LaravelRay\RayServiceProvider;
+use Spatie\LaravelRay\Tests\Concerns\MatchesOsSafeSnapshots;
 use Spatie\LaravelRay\Tests\TestClasses\FakeClient;
 use Spatie\Ray\Settings\Settings;
 
 class TestCase extends Orchestra
 {
-    protected FakeClient $client;
+    use MatchesOsSafeSnapshots;
+
+    /** @var \Spatie\LaravelRay\Tests\TestClasses\FakeClient */
+    protected $client;
 
     public function setUp(): void
     {
@@ -33,7 +37,7 @@ class TestCase extends Orchestra
             return $ray;
         });
 
-        View::addLocation(__DIR__ . '/resources/view');
+        View::addLocation(__DIR__ . '/resources/views');
     }
 
     protected function getPackageProviders($app)
@@ -54,6 +58,15 @@ class TestCase extends Orchestra
 
         Schema::create('users', function (Blueprint $table) {
             $table->bigInteger('id');
+        });
+    }
+
+    protected function useRealUuid()
+    {
+        $this->app->bind(Ray::class, function () {
+            Ray::$fakeUuid = null;
+
+            return Ray::create($this->client);
         });
     }
 }

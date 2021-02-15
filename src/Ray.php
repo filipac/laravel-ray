@@ -2,47 +2,44 @@
 
 namespace Spatie\LaravelRay;
 
+use Closure;
 use Composer\InstalledVersions;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Mail\Mailable;
-use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
+use Illuminate\View\View;
+use Spatie\LaravelRay\Payloads\LoggedMailPayload;
 use Spatie\LaravelRay\Payloads\MailablePayload;
+use Spatie\LaravelRay\Payloads\MarkdownPayload;
 use Spatie\LaravelRay\Payloads\ModelPayload;
+use Spatie\LaravelRay\Payloads\ResponsePayload;
+use Spatie\LaravelRay\Payloads\ViewPayload;
+use Spatie\LaravelRay\Watchers\CacheWatcher;
+use Spatie\LaravelRay\Watchers\EventWatcher;
+use Spatie\LaravelRay\Watchers\JobWatcher;
+use Spatie\LaravelRay\Watchers\QueryWatcher;
+use Spatie\LaravelRay\Watchers\RequestWatcher;
+use Spatie\LaravelRay\Watchers\ViewWatcher;
+use Spatie\LaravelRay\Watchers\Watcher;
+use Spatie\Ray\Client;
 use Spatie\Ray\Ray as BaseRay;
+use Spatie\Ray\Settings\Settings;
 
 class Ray extends BaseRay
 {
-    public static bool $enabled = true;
-
-    public function enable(): self
+    public function __construct(Settings $settings, Client $client = null, string $uuid = null)
     {
-        self::$enabled = true;
+        // persist the enabled setting across multiple instantiations
+        $enabled = static::$enabled;
 
-        return $this;
-    }
+        parent::__construct($settings, $client, $uuid);
 
-    public function disable(): self
-    {
-        self::$enabled = false;
-
-        return $this;
-    }
-
-    public function enabled(): bool
-    {
-        return self::$enabled;
-    }
-
-    public function disabled(): bool
-    {
-        return ! self::$enabled;
+        static::$enabled = $enabled;
     }
 
     public function loggedMail(string $loggedMail): self
     {
-        $html = '<html' . Str::between($loggedMail, '<html', '</html>') . '</html>';
-
-        $payload = new MailablePayload($html);
+        $payload = LoggedMailPayload::forLoggedMail($loggedMail);
 
         $this->sendRequest($payload);
 
@@ -58,84 +55,247 @@ class Ray extends BaseRay
         return $this;
     }
 
-    public function model(?Model $model): self
+    /**
+     * @param Model|iterable ...$models
+     *
+     * @return \Spatie\LaravelRay\Ray
+     */
+    public function model(...$model): self
     {
-        $payload = new ModelPayload($model);
+        $models = [];
+        foreach ($model as $passedModel) {
+            if (is_null($passedModel)) {
+                $models[] = null;
+
+                continue;
+            }
+            if ($passedModel instanceof Model) {
+                $models[] = $passedModel;
+
+                continue;
+            }
+
+            if (is_iterable($model)) {
+                foreach ($passedModel as $item) {
+                    $models[] = $item;
+
+                    continue;
+                }
+            }
+        }
+
+        $payloads = array_map(function (?Model $model) {
+            return new ModelPayload($model);
+        }, $models);
+
+        foreach ($payloads as $payload) {
+            ray()->sendRequest($payload);
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param Model|iterable $models
+     *
+     * @return \Spatie\LaravelRay\Ray
+     */
+    public function models($models): self
+    {
+        return $this->model($models);
+    }
+
+    public function markdown(string $markdown): self
+    {
+        $payload = new MarkdownPayload($markdown);
 
         $this->sendRequest($payload);
 
         return $this;
     }
 
-    public function showEvents($callable = null): self
+    /**
+     * @param null $callable
+     *
+     * @return \Spatie\LaravelRay\Ray
+     */
+    public function showEvents($callable = null)
     {
-        $wasLoggingEvents = $this->eventLogger()->isLoggingEvents();
+        $watcher = app(EventWatcher::class);
 
-        $this->eventLogger()->enable();
-
-        if ($callable) {
-            $callable();
-
-            if (! $wasLoggingEvents) {
-                $this->eventLogger()->disable();
-            }
-        }
-
-        return $this;
+        return $this->handleWatcherCallable($watcher, $callable);
     }
 
-    public function events($callable = null): self
+    public function events($callable = null)
     {
         return $this->showEvents($callable);
     }
 
     public function stopShowingEvents(): self
     {
-        /** @var \Spatie\LaravelRay\EventLogger $eventLogger */
-        $eventLogger = app(EventLogger::class);
+        /** @var \Spatie\LaravelRay\Watchers\EventWatcher $eventWatcher */
+        $eventWatcher = app(EventWatcher::class);
 
-        $eventLogger->disable();
+        $eventWatcher->disable();
 
         return $this;
     }
 
-    public function showQueries($callable = null): self
+    /**
+     * @param null $callable
+     *
+     * @return \Spatie\LaravelRay\Ray
+     */
+    public function showJobs($callable = null)
     {
-        $wasLoggingQueries = $this->queryLogger()->isLoggingQueries();
+        $watcher = app(JobWatcher::class);
 
-        $this->queryLogger()->startLoggingQueries();
+        return $this->handleWatcherCallable($watcher, $callable);
+    }
 
-        if (! is_null($callable)) {
-            $callable();
+    /**
+     * @param null $callable
+     *
+     * @return \Spatie\LaravelRay\Ray
+     */
+    public function showCache($callable = null)
+    {
+        $watcher = app(CacheWatcher::class);
 
-            if (! $wasLoggingQueries) {
-                $this->stopShowingQueries();
-            }
-        }
+        return $this->handleWatcherCallable($watcher, $callable);
+    }
+
+    public function stopShowingCache(): self
+    {
+        app(CacheWatcher::class)->disable();
 
         return $this;
     }
 
-    public function queries($callable = null): self
+    public function jobs($callable = null)
+    {
+        return $this->showJobs($callable);
+    }
+
+    public function stopShowingJobs(): self
+    {
+        app(JobWatcher::class)->disable();
+
+        return $this;
+    }
+
+    public function view(View $view): self
+    {
+        $payload = new ViewPayload($view);
+
+        return $this->sendRequest($payload);
+    }
+
+    /**
+     * @param null $callable
+     *
+     * @return \Spatie\LaravelRay\Ray
+     */
+    public function showViews($callable = null)
+    {
+        $watcher = app(ViewWatcher::class);
+
+        return $this->handleWatcherCallable($watcher, $callable);
+    }
+
+    public function views($callable = null)
+    {
+        return $this->showViews($callable);
+    }
+
+    public function stopShowingViews(): self
+    {
+        app(ViewWatcher::class)->disable();
+
+        return $this;
+    }
+
+    /**
+     * @param null $callable
+     *
+     * @return \Spatie\LaravelRay\Ray
+     */
+    public function showQueries($callable = null)
+    {
+        $watcher = app(QueryWatcher::class);
+
+        return $this->handleWatcherCallable($watcher, $callable);
+    }
+
+    public function queries($callable = null)
     {
         return $this->showQueries($callable);
     }
 
     public function stopShowingQueries(): self
     {
-        $this->queryLogger()->stopLoggingQueries();
+        app(QueryWatcher::class)->disable();
 
         return $this;
     }
 
-    protected function eventLogger(): EventLogger
+    /**
+     * @param null $callable
+     *
+     * @return \Spatie\LaravelRay\Ray
+     */
+    public function showRequests($callable = null)
     {
-        return app(EventLogger::class);
+        $watcher = app(RequestWatcher::class);
+
+        return $this->handleWatcherCallable($watcher, $callable);
     }
 
-    protected function queryLogger(): QueryLogger
+    public function requests($callable = null)
     {
-        return app(QueryLogger::class);
+        return $this->showRequests($callable);
+    }
+
+    public function stopShowingRequests(): self
+    {
+        $this->requestWatcher()->disable();
+
+        return $this;
+    }
+
+    protected function handleWatcherCallable(Watcher $watcher, Closure $callable = null): RayProxy
+    {
+        $rayProxy = new RayProxy();
+
+        $wasEnabled = $watcher->enabled();
+
+        $watcher->enable();
+
+        if ($rayProxy) {
+            $watcher->setRayProxy($rayProxy);
+        }
+
+        if ($callable) {
+            $callable();
+
+            if (! $wasEnabled) {
+                $watcher->disable();
+            }
+        }
+
+        return $rayProxy;
+    }
+
+    public function testResponse(TestResponse $testResponse)
+    {
+        $payload = ResponsePayload::fromTestResponse($testResponse);
+
+        $this->sendRequest($payload);
+    }
+
+    protected function requestWatcher(): RequestWatcher
+    {
+        return app(RequestWatcher::class);
     }
 
     /**
@@ -147,7 +307,7 @@ class Ray extends BaseRay
      */
     public function sendRequest($payloads, array $meta = []): BaseRay
     {
-        if (! static::$enabled) {
+        if (! $this->enabled()) {
             return $this;
         }
 
@@ -156,7 +316,11 @@ class Ray extends BaseRay
         ];
 
         if (class_exists(InstalledVersions::class)) {
-            $meta['laravel_ray_package_version'] = InstalledVersions::getVersion('spatie/laravel-ray');
+            try {
+                $meta['laravel_ray_package_version'] = InstalledVersions::getVersion('spatie/laravel-ray');
+            } catch (\Exception $e) {
+                $meta['laravel_ray_package_version'] = '0.0.0';
+            }
         }
 
         return BaseRay::sendRequest($payloads, $meta);

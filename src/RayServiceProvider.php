@@ -2,42 +2,56 @@
 
 namespace Spatie\LaravelRay;
 
-use Illuminate\Console\Events\CommandStarting;
-use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Mail\Mailable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Blade;
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
 use Spatie\LaravelRay\Commands\PublishConfigCommand;
-use Spatie\LaravelRay\DumpRecorder\DumpRecorder;
+use Spatie\LaravelRay\Payloads\MailablePayload;
+use Spatie\LaravelRay\Payloads\ModelPayload;
+use Spatie\LaravelRay\Watchers\ApplicationLogWatcher;
+use Spatie\LaravelRay\Watchers\CacheWatcher;
+use Spatie\LaravelRay\Watchers\DumpWatcher;
+use Spatie\LaravelRay\Watchers\EventWatcher;
+use Spatie\LaravelRay\Watchers\ExceptionWatcher;
+use Spatie\LaravelRay\Watchers\JobWatcher;
+use Spatie\LaravelRay\Watchers\LoggedMailWatcher;
+use Spatie\LaravelRay\Watchers\QueryWatcher;
+use Spatie\LaravelRay\Watchers\RequestWatcher;
+use Spatie\LaravelRay\Watchers\ViewWatcher;
 use Spatie\Ray\Client;
-use Spatie\Ray\Payloads\ApplicationLogPayload;
+use Spatie\Ray\PayloadFactory;
 use Spatie\Ray\Payloads\Payload;
 use Spatie\Ray\Settings\Settings;
 use Spatie\Ray\Settings\SettingsFactory;
 
 class RayServiceProvider extends ServiceProvider
 {
-    public function boot()
-    {
-        if ($this->app->runningInConsole()) {
-            $this->commands([
-                PublishConfigCommand::class,
-            ]);
-        }
-    }
-
     public function register()
     {
         $this
+            ->registerCommands()
             ->registerSettings()
             ->registerBindings()
-            ->listenForLogEvents()
-            ->listenForDumps()
+            ->registerWatchers()
             ->registerMacros()
             ->registerBindings()
-            ->listenForEvents();
+            ->registerBladeDirectives()
+            ->registerPayloadFinder();
+    }
+
+    public function boot()
+    {
+        $this->bootWatchers();
+    }
+
+    protected function registerCommands(): self
+    {
+        $this->commands(PublishConfigCommand::class);
+
+        return $this;
     }
 
     protected function registerSettings(): self
@@ -47,8 +61,13 @@ class RayServiceProvider extends ServiceProvider
 
             return $settings->setDefaultSettings([
                 'enable' => ! app()->environment('production'),
-                'send_log_calls_to_ray' => true,
+                'send_cache_to_ray' => false,
                 'send_dumps_to_ray' => true,
+                'send_jobs_to_ray' => false,
+                'send_log_calls_to_ray' => true,
+                'send_queries_to_ray' => false,
+                'send_requests_to_ray' => false,
+                'send_views_to_ray' => false,
             ]);
         });
 
@@ -59,7 +78,9 @@ class RayServiceProvider extends ServiceProvider
     {
         $settings = app(Settings::class);
 
-        $this->app->bind(Client::class, fn () => new Client($settings->port, $settings->host));
+        $this->app->bind(Client::class, function () use ($settings) {
+            return new Client($settings->port, $settings->host);
+        });
 
         $this->app->bind(Ray::class, function () {
             $client = app(Client::class);
@@ -75,59 +96,56 @@ class RayServiceProvider extends ServiceProvider
             return $ray;
         });
 
-        $this->app->singleton(QueryLogger::class, fn () => new QueryLogger());
-
         Payload::$originFactoryClass = OriginFactory::class;
 
-        $this->app->singleton(EventLogger::class, fn () => new EventLogger());
+        return $this;
+    }
+
+    protected function registerWatchers(): self
+    {
+        $watchers = [
+            ExceptionWatcher::class,
+            LoggedMailWatcher::class,
+            ApplicationLogWatcher::class,
+            JobWatcher::class,
+            EventWatcher::class,
+            DumpWatcher::class,
+            QueryWatcher::class,
+            ViewWatcher::class,
+            CacheWatcher::class,
+            RequestWatcher::class,
+        ];
+
+        collect($watchers)
+            ->each(function (string $watcherClass) {
+                $this->app->singleton($watcherClass);
+            });
 
         return $this;
     }
 
-    protected function listenForLogEvents(): self
+    protected function bootWatchers(): self
     {
-        Event::listen(MessageLogged::class, function (MessageLogged $message) {
+        $watchers = [
+            ExceptionWatcher::class,
+            LoggedMailWatcher::class,
+            ApplicationLogWatcher::class,
+            JobWatcher::class,
+            EventWatcher::class,
+            DumpWatcher::class,
+            QueryWatcher::class,
+            ViewWatcher::class,
+            CacheWatcher::class,
+            RequestWatcher::class,
+        ];
 
-            /** @var Ray $ray */
-            $ray = app(Ray::class);
+        collect($watchers)
+            ->each(function (string $watcherClass) {
+                /** @var \Spatie\LaravelRay\Watchers\Watcher $watcher */
+                $watcher = app($watcherClass);
 
-            if (! $ray->settings->send_log_calls_to_ray) {
-                return $this;
-            }
-
-            $concernsMailable = $this->concernsLoggedMail($message->message);
-
-            if ($concernsMailable) {
-                $ray->loggedMail($message->message);
-
-                return $this;
-            }
-
-            $payload = new ApplicationLogPayload($message->message);
-
-            $ray->sendRequest($payload);
-
-            if ($message->level === 'error') {
-                $ray->color('red');
-            }
-
-            if ($message->level === 'warning') {
-                $ray->color('orange');
-            }
-        });
-
-        return $this;
-    }
-
-    protected function listenForDumps(): self
-    {
-        $settings = app(Settings::class);
-
-        if (! $settings->send_dumps_to_ray) {
-            return $this;
-        }
-
-        $this->app->make(DumpRecorder::class)->register();
+                $watcher->register();
+            });
 
         return $this;
     }
@@ -138,6 +156,12 @@ class RayServiceProvider extends ServiceProvider
             $description === ''
                 ? ray($this->items)
                 : ray($description, $this->items);
+
+            return $this;
+        });
+
+        TestResponse::macro('ray', function () {
+            ray()->testResponse($this);
 
             return $this;
         });
@@ -158,32 +182,20 @@ class RayServiceProvider extends ServiceProvider
         return $this;
     }
 
-    protected function listenForEvents(): self
+    protected function registerPayloadFinder(): self
     {
-        Event::listen('*', function (string $event, array $arguments) {
-            /** @var \Spatie\LaravelRay\EventLogger $eventLogger */
-            $eventLogger = app(EventLogger::class);
+        PayloadFactory::registerPayloadFinder(function ($argument) {
+            if ($argument instanceof Model) {
+                return new ModelPayload($argument);
+            }
 
-            $eventLogger->handleEvent($event, $arguments);
-        });
+            if ($argument instanceof Mailable) {
+                return MailablePayload::forMailable($argument);
+            }
 
-        Event::listen(CommandStarting::class, function (CommandStarting $event) {
-            $this->consoleOutput = $event->output;
+            return null;
         });
 
         return $this;
-    }
-
-    protected function concernsLoggedMail(string $message): bool
-    {
-        if (! Str::startsWith($message, 'Message-ID')) {
-            return false;
-        }
-
-        if (! Str::contains($message, '@swift.generated')) {
-            return false;
-        }
-
-        return true;
     }
 }

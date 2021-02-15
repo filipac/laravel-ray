@@ -1,0 +1,44 @@
+[
+    {
+        "uuid": "fakeUuid",
+        "payloads": [
+            {
+                "type": "table",
+                "content": {
+                    "values": {
+                        "Event": "<code>Key written<\/code>",
+                        "Key": "cached-key",
+                        "Value": "cached-value"
+                    },
+                    "label": "Cache"
+                },
+                "origin": {
+                    "file": "\/tests\/Unit\/CacheTest.php",
+                    "line_number": 47
+                }
+            }
+        ],
+        "meta": []
+    },
+    {
+        "uuid": "fakeUuid",
+        "payloads": [
+            {
+                "type": "table",
+                "content": {
+                    "values": {
+                        "Event": "<code>Hit<\/code>",
+                        "Key": "cached-key",
+                        "Value": "cached-value"
+                    },
+                    "label": "Cache"
+                },
+                "origin": {
+                    "file": "\/tests\/Unit\/CacheTest.php",
+                    "line_number": 49
+                }
+            }
+        ],
+        "meta": []
+    }
+]
