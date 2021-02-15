@@ -7,7 +7,6 @@ use Illuminate\Mail\Mailable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\ServiceProvider;
-use Illuminate\Testing\TestResponse;
 use Spatie\LaravelRay\Commands\PublishConfigCommand;
 use Spatie\LaravelRay\Payloads\MailablePayload;
 use Spatie\LaravelRay\Payloads\ModelPayload;
@@ -155,12 +154,6 @@ class RayServiceProvider extends ServiceProvider
             $description === ''
                 ? ray($this->items)
                 : ray($description, $this->items);
-
-            return $this;
-        });
-
-        TestResponse::macro('ray', function () {
-            ray()->testResponse($this);
 
             return $this;
         });
